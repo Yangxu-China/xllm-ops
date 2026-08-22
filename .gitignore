@@ -100,3 +100,9 @@ ENV/
 /third_party/json/
 /third_party/makeself/
 /third_party/pkg/
+.claude/
+.opencode/
+test/python_test/build/
+test/python_test/golden_cache/
+test/python_test/msprof_*/
+test/python_test/golden_cache.tar.gz

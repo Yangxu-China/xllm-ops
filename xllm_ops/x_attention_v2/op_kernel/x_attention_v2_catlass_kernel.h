@@ -13,27 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef X_ATTN_CATLASS_KERNEL_H
-#define X_ATTN_CATLASS_KERNEL_H
-
-// [catlass arch guard]
-// The catlass tile-copy forwarding headers (e.g. gemm/tile/copy_gm_to_l1.hpp)
-// dispatch ONLY when CATLASS_ARCH is explicitly defined as 2201 (AtlasA2/A3) or
-// 3510 (Ascend950/A5); otherwise CopyGmToL1/CopyL1ToL0A/... templates are never
-// defined. The kernel(device) translation unit is NOT given -DCATLASS_ARCH
-// (host-only inject), but the toolchain injects __NPU_ARCH__ (2201 for A2/A3,
-// 3510 for A5). Derive CATLASS_ARCH from it HERE, before ANY catlass include,
-// so this fix works on A3 without affecting the already-validated A5 path.
-#if !defined(CATLASS_ARCH) && defined(__NPU_ARCH__)
-#if (__NPU_ARCH__ == 2201) || (__NPU_ARCH__ == 3510)
-#define CATLASS_ARCH __NPU_ARCH__
-#endif
-#endif
+#ifndef X_ATTN_V2_CATLASS_KERNEL_H
+#define X_ATTN_V2_CATLASS_KERNEL_H
 
 #include "catlass/arch/arch.hpp"
 #include "catlass/arch/cross_core_sync.hpp"
 #include "catlass/arch/resource.hpp"
 #include "catlass/catlass.hpp"
+#include "catlass/debug.hpp"
 #include "catlass/epilogue/block/block_epilogue.hpp"
 #include "catlass/epilogue/dispatch_policy.hpp"
 #include "catlass/gemm/block/block_mmad.hpp"
@@ -69,7 +56,7 @@ class UnsharedFAInferKernel {
     using LayoutO = typename BlockMmadPV::LayoutC;
 
     CATLASS_DEVICE
-    UnsharedFAInferKernel(XAttentionTilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
+    UnsharedFAInferKernel(XAttentionV2TilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
     }
 
     template <int32_t CORE_TYPE = g_coreType>
@@ -267,7 +254,7 @@ class UnsharedFAInferKernel {
     Arch::Resource<ArchTag> resource;
     Arch::CrossCoreFlag qkReady{QK_READY_ID};
     Arch::CrossCoreFlag softmaxReady{SOFTMAX_READY_ID};
-    XAttentionTilingData* faTilingData;
+    XAttentionV2TilingData* faTilingData;
 };
  
  /*
@@ -314,7 +301,7 @@ class UnsharedFAInferKernel {
  
      // Methods
      CATLASS_DEVICE
-     SharedFAInferKernel(XAttentionTilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
+     SharedFAInferKernel(XAttentionV2TilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
      }
  
      template <int32_t CORE_TYPE = g_coreType>
@@ -937,7 +924,7 @@ class UnsharedFAInferKernel {
      Arch::CrossCoreFlag qkReady{QK_READY_ID};
      Arch::CrossCoreFlag softmaxReady{SOFTMAX_READY_ID};
      Arch::CrossCoreFlag pvReady{PV_READY_ID};
-     XAttentionTilingData* faTilingData;
+     XAttentionV2TilingData* faTilingData;
  };
  
 
@@ -985,7 +972,7 @@ class UnsharedFAInferKernel {
      using LayoutUpdate = typename EpilogueRescaleO::LayoutUpdate;
      // Methods
      CATLASS_DEVICE
-     SharedFAInferKernelShort(XAttentionTilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
+     SharedFAInferKernelShort(XAttentionV2TilingData* tilingDataPtr): faTilingData(tilingDataPtr) {
      }
  
 
@@ -1509,7 +1496,7 @@ class UnsharedFAInferKernel {
      Arch::CrossCoreFlag qkReady{QK_READY_ID};
      Arch::CrossCoreFlag softmaxReady{SOFTMAX_READY_ID};
      Arch::CrossCoreFlag pvReady{PV_READY_ID};
-     XAttentionTilingData* faTilingData;
+     XAttentionV2TilingData* faTilingData;
  };
 
 
@@ -1521,7 +1508,7 @@ public:
     using ElementInput = typename EpilogueCombineScale::ElementInput;
 
     CATLASS_DEVICE
-    CombineScaleKernel(XAttentionTilingData* tilingDataPtr): faTilingData(tilingDataPtr) {}
+    CombineScaleKernel(XAttentionV2TilingData* tilingDataPtr): faTilingData(tilingDataPtr) {}
 
     template <int32_t CORE_TYPE = g_coreType>
     CATLASS_DEVICE void operator()(XAttnKernelParams const &params);
@@ -1636,7 +1623,7 @@ public:
     }
 private:
     Arch::Resource<ArchTag> resource;
-    XAttentionTilingData* faTilingData;
+    XAttentionV2TilingData* faTilingData;
 };
 
 #endif

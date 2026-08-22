@@ -367,7 +367,7 @@ class TestFlashAttentionInfer:
         print(f"  decode_step_tensor shape: {decode_step_tensor.shape}")
         print("="*80 + "\n")
         
-        attn_out = custom_ops.x_attention_npu(
+        attn_out = custom_ops.x_attention_v2_npu(
             q, k, v, unshared_k, unshared_v, actual_shared_kvlen, decode_step_tensor,
             block_tables, unshared_block_tables
         )
@@ -566,7 +566,7 @@ class TestFlashAttentionInfer:
 @pytest.mark.parametrize("beam_size", [128, 256, 512])
 @pytest.mark.parametrize("kv_seqlen", [128, 256, 512, 1024])
 @pytest.mark.parametrize("unshared_seqlen", [2, 4])
-def test_x_attention_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_seqlen, unshared_seqlen):
+def test_x_attention_v2_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_seqlen, unshared_seqlen):
     try:
         torch_npu.npu.set_device(0)
     except Exception as e:
