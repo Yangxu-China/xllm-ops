@@ -561,7 +561,7 @@ class TestFlashAttentionInfer:
             assert torch.allclose(npu_res, golden_res, atol=0.001, rtol=0.001)
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("num_head, kv_heads", [(16, 8), (32, 8)])
+@pytest.mark.parametrize("num_head, kv_heads", [(16, 8), (32, 8), (16, 4)])
 @pytest.mark.parametrize("request_num", [1, 6])
 @pytest.mark.parametrize("beam_size", [128, 256, 512])
 @pytest.mark.parametrize("kv_seqlen", [128, 256, 512, 1024])
@@ -571,6 +571,9 @@ def test_x_attention_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_s
         torch_npu.npu.set_device(0)
     except Exception as e:
         pytest.skip(f"NPU device not available: {e}")
+
+    if num_head == 16 and kv_heads == 4 and unshared_seqlen != 2:
+        pytest.skip("GQA(16,4) only tested with max_decode_step=2")
 
     q_seqlen = 1
     embedding_size = 128
