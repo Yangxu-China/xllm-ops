@@ -11,6 +11,7 @@
 
 import os
 import stat
+from packaging import version
 
 REPLAY_BATCH = "batch"
 REPLAY_ITERATE = "iterate"
@@ -29,7 +30,45 @@ SOC_MAP_EXT = {
     "ascend950": "Ascend950PR_9599",
     "kirinx90": "KirinX90",
 }
-BIN_CMD = "opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+CHECK_ASC_DEVKIT_VERSION = False
+
+
+def _parse_version_from_file(file):
+    for line in file:
+        if line.startswith("Version="):
+            return line.strip().split("=")[1]
+    return None
+
+
+def get_version_from_file(filename):
+    try:
+        with open(filename, "r") as file:
+            return _parse_version_from_file(file)
+    except Exception:
+        return None
+
+
+def check_asc_devkit_version(min_version="9.0.0"):
+    ascend_cann_path = os.environ.get("ASCEND_HOME_PATH")
+    if not ascend_cann_path:
+        return False
+    version_file = os.path.join(
+        ascend_cann_path, "share", "info", "asc-devkit", "version.info"
+    )
+    if not os.path.exists(version_file):
+        return False
+    current_version = get_version_from_file(version_file)
+    if not current_version:
+        return False
+    return version.parse(current_version) >= version.parse(min_version)
+
+
+CHECK_ASC_DEVKIT_VERSION = check_asc_devkit_version("9.0.0")
+if CHECK_ASC_DEVKIT_VERSION:
+    BIN_CMD = "asc_opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
+    --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic\n"
+else:
+    BIN_CMD = "opc $1 --main_func={fun} --input_param={param} --soc_version={soc} \
 --output=$2 --impl_mode={impl} --simplified_key_mode=0 --op_mode=dynamic\n"
 SET_PLOG_LEVEL_ERROR = "export ASCEND_GLOBAL_LOG_LEVEL=3\n"
 SET_PLOG_STDOUT = "export ASCEND_SLOG_PRINT_TO_STDOUT=1\n"

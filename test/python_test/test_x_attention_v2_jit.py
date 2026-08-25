@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
-# Copyright 2025 The xLLM Authors. All Rights Reserved.
+# Copyright 2026 The xLLM Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,43 +13,57 @@
 # limitations under the License.
 # ==============================================================================
 
+"""Tests for x_attention_v2 JIT direct-launch path.
+
+Calls the host entry function `x_attention_v2` (non-jit) from the kernel .py,
+which internally computes tiling and launches `x_attention_v2_kernel` via JIT.
+Golden cache is stored under golden_cache/x_attention/.
+"""
+
+import copy
 import os
 import random
-import copy
+from dataclasses import dataclass
+
 import pytest
 import torch
-
-from dataclasses import dataclass
 from ml_dtypes import bfloat16
 
-
 torch_npu = pytest.importorskip("torch_npu")
-custom_ops = pytest.importorskip("custom_ops")
 
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
+GOLDEN_CACHE_DIR = os.path.join(WORKSPACE, "golden_cache", "x_attention")
 torch.manual_seed(1)
 
-GOLDEN_CACHE_DIR = os.path.join(WORKSPACE, "golden_cache")
+_DTYPE_NAME = {torch.bfloat16: "bf16", torch.float16: "fp16"}
 
-_DTYPE_NAME_MAP = {torch.bfloat16: "bf16", torch.float16: "fp16"}
 
-def _golden_cache_key(dtype, num_head, kv_heads, request_num, beam_size, kv_seqlen, unshared_seqlen):
-    dtype_name = _DTYPE_NAME_MAP.get(dtype, str(dtype))
+def _golden_cache_key(
+    dtype: torch.dtype,
+    num_head: int,
+    kv_heads: int,
+    request_num: int,
+    beam_size: int,
+    kv_seqlen: int,
+    unshared_seqlen: int,
+) -> str:
+    dtype_name = _DTYPE_NAME.get(dtype, str(dtype))
     return f"{dtype_name}_{num_head}_{kv_heads}_{request_num}_{beam_size}_{kv_seqlen}_{unshared_seqlen}"
 
-def _save_golden(cache_key, data_dict):
-    os.makedirs(GOLDEN_CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(GOLDEN_CACHE_DIR, f"{cache_key}.pt")
-    torch.save(data_dict, cache_path)
 
-def _load_golden(cache_key):
-    cache_path = os.path.join(GOLDEN_CACHE_DIR, f"{cache_key}.pt")
+def _save_golden(key: str, data_dict: dict) -> None:
+    os.makedirs(GOLDEN_CACHE_DIR, exist_ok=True)
+    torch.save(data_dict, os.path.join(GOLDEN_CACHE_DIR, f"{key}.pt"))
+
+
+def _load_golden(key: str) -> dict | None:
+    cache_path = os.path.join(GOLDEN_CACHE_DIR, f"{key}.pt")
     if not os.path.exists(cache_path):
         return None
     return torch.load(cache_path, weights_only=False)
 
 
-def gen_seqlen(max_q_seqlen: int, max_kv_seqlen: int, is_varied_len: int, batch: int):
+def _gen_seqlen(max_q_seqlen: int, max_kv_seqlen: int, is_varied_len: int, batch: int) -> tuple[list[int], list[int]]:
     q_seqlen_list = []
     kv_seqlen_list = []
     if is_varied_len == 0:
@@ -65,32 +78,21 @@ def gen_seqlen(max_q_seqlen: int, max_kv_seqlen: int, is_varied_len: int, batch:
     return q_seqlen_list, kv_seqlen_list
 
 
-class TestFlashAttentionInfer:
+class TestXAttentionV2:
     @dataclass
     class AttentionInputs:
-        # [bs, 1, headnum, headdim]
         query: torch.Tensor
-        # shared_kv_type=1: [num_blocks, block_size, kv_head, headdim]
-        # shared_kv_type=0: [num_shared_kv, kv_head, headdim]
         key_cache: torch.Tensor
         value_cache: torch.Tensor
-        # unshared_kv_type=0: [bs (request_num * beam_size), kv_head, max_decode_step, headdim]
-        # unshared_kv_type=1: [max_request_num, beam_size, kv_head, max_decode_step, headdim]
         unshared_k: torch.Tensor
         unshared_v: torch.Tensor
-        # shared_kv_type=1: [request_num, max_blocks_per_batch] max_blocks_per_batch = ceil(max_shared_kvlen / block_size)
-        # shared_kv_type=0: None
         block_tables: list
-        # unshared_kv_type=1: [request_num] list of block indices for each request
-        # unshared_kv_type=0: None
         unshared_block_tables: list
-        # [request_num] (1, 1, 1)
         q_seqlen_list: list
-        # [request_num] (share_len1, share_len2)
         k_seqlen_list: list
-        global_mask: any
+        global_mask: torch.Tensor | None
         mask_type: int
-        shape_param: any
+        shape_param: "TestXAttentionV2.GenDataParams"
 
     @dataclass
     class GenDataParams:
@@ -104,12 +106,20 @@ class TestFlashAttentionInfer:
         num_blocks: int
         block_size: int
         mask_type: int
-        dtype: any
+        dtype: torch.dtype
         shared_kv_type: int
         unshared_kv_type: int
 
     @classmethod
-    def group_matmul(cls, head, kv_head, left, right, right_row=None, right_col=None):
+    def group_matmul(
+        cls,
+        head: int,
+        kv_head: int,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        right_row: int | None = None,
+        right_col: int | None = None,
+    ) -> torch.Tensor:
         group_num = head // kv_head
         score = None
         for i in range(kv_head):
@@ -123,27 +133,26 @@ class TestFlashAttentionInfer:
         return score
 
     @classmethod
-    def softmax_numpy(cls, sim):
+    def softmax_numpy(cls, sim: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         row_max = torch.max(sim, dim=-1, keepdim=True).values
         sim_sub = sim - row_max
         sim_sub = torch.exp(sim_sub)
         row_sum = torch.sum(sim_sub, dim=-1, keepdim=True)
-        soft_res = sim_sub  # no div rowsum
+        soft_res = sim_sub
         return soft_res, row_max, row_sum
 
-    def ref_masked_attention(self,
-        query,  # (q_seqlen, num_heads, head_size)
-        key,    # (k_seqlen, kv_heads, head_size)
-        value,
+    def ref_masked_attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
         scale: float,
-        mask    # (q_seqlen, k_seqlen)
-    ):
-        # Q * K.T
+        mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         query = query.permute(1, 0, 2)
         key = key.permute(1, 2, 0)
-        sim_high = self.group_matmul(query.shape[0], key.shape[0], query, key)  # (head_num, q_seqlen, k_seqlen)
+        sim_high = self.group_matmul(query.shape[0], key.shape[0], query, key)
         sim_high = sim_high * scale
-        # softmax
         p_high, gm, gl = self.softmax_numpy(sim_high)
         p = p_high.to(query.dtype)
         p_high = p_high.to(torch.float32)
@@ -155,8 +164,9 @@ class TestFlashAttentionInfer:
         out = out.to(query.dtype)
         return out, out_high, gm, gl
 
-    def ref_single_query_unshared_kv_attention(self,
-        attention_inputs: "TestFlashAttentionInfer.AttentionInputs",
+    def ref_single_query_unshared_kv_attention(
+        self,
+        attention_inputs: "TestXAttentionV2.AttentionInputs",
         output: torch.Tensor,
         true_out: torch.Tensor,
         unshared_gl: torch.Tensor,
@@ -170,30 +180,26 @@ class TestFlashAttentionInfer:
         batch = beam_size * request_num
         decode_step = attention_inputs.shape_param.unshared_kvlen
         unshared_kv_type = attention_inputs.shape_param.unshared_kv_type
-        max_decode_step = attention_inputs.unshared_k.shape[-2] if len(attention_inputs.unshared_k.shape) == 5 else attention_inputs.unshared_k.shape[2]
-
-        scale = 1.0 / (head_size ** 0.5)
-
+        max_decode_step = (
+            attention_inputs.unshared_k.shape[-2]
+            if len(attention_inputs.unshared_k.shape) == 5
+            else attention_inputs.unshared_k.shape[2]
+        )
+        scale = 1.0 / (head_size**0.5)
         if unshared_kv_type == 0:
-            # Continuous format: [batch, kv_heads, max_decode_step, head_size]
             assert attention_inputs.query.shape == (batch, num_heads, head_size)
             assert attention_inputs.unshared_k.shape == (batch, kv_heads, max_decode_step, head_size)
             assert attention_inputs.unshared_v.shape == (batch, kv_heads, max_decode_step, head_size)
-
             for i in range(batch):
                 q = attention_inputs.query[i : i + 1, :, :]
                 k = attention_inputs.unshared_k[i, :, :, :]
                 v = attention_inputs.unshared_v[i, :, :, :]
-                # Transpose for group_matmul
                 q_t = q.permute(1, 0, 2)
                 k_t = k.permute(0, 2, 1)
-
-                sim = self.group_matmul(num_heads, kv_heads, q_t, k_t, head_size, decode_step)  # [num_heads, 1, unshared_kvlen]
+                sim = self.group_matmul(num_heads, kv_heads, q_t, k_t, head_size, decode_step)
                 sim = sim * scale
-
-                # Softmax with stats
                 p, gm, gl = self.softmax_numpy(sim)
-                gm = gm.permute(1, 0, 2)  # (q_seqlen, num_heads, 1)
+                gm = gm.permute(1, 0, 2)
                 gl = gl.permute(1, 0, 2)
                 p_high = p.to(torch.float32)
                 out_high = self.group_matmul(num_heads, kv_heads, p_high, v, decode_step, head_size)
@@ -202,47 +208,34 @@ class TestFlashAttentionInfer:
                 out_low = self.group_matmul(num_heads, kv_heads, p_low, v, decode_step, head_size)
                 out_low = out_low.permute(1, 0, 2)
                 out_low = out_low.to(attention_inputs.query.dtype)
-
-                # Write outputs
                 output[i : i + 1, :, :] = out_low
                 true_out[i : i + 1, :, :] = out_high
-
                 unshared_gm[i, :, :] = gm[:, :, :]
                 unshared_gl[i, :, :] = gl[:, :, :]
         else:
-            # Paged format: [max_request_num, beam_size, kv_heads, max_decode_step, head_size]
             assert attention_inputs.query.shape == (batch, num_heads, head_size)
             assert len(attention_inputs.unshared_k.shape) == 5
             assert attention_inputs.unshared_k.shape == attention_inputs.unshared_v.shape
             max_request_num = attention_inputs.unshared_k.shape[0]
-            
-            # Use unshared_block_tables to map request to cache index
             for req_idx in range(request_num):
-                # Get the cache index for this request from unshared_block_tables
-                if attention_inputs.unshared_block_tables is not None and len(attention_inputs.unshared_block_tables) > req_idx:
-                    cache_idx = attention_inputs.unshared_block_tables[req_idx][0]  # First block index for this request
+                if (
+                    attention_inputs.unshared_block_tables is not None
+                    and len(attention_inputs.unshared_block_tables) > req_idx
+                ):
+                    cache_idx = attention_inputs.unshared_block_tables[req_idx][0]
                 else:
-                    # Fallback: use request index directly
                     cache_idx = req_idx
-                
                 for beam_idx in range(beam_size):
                     i = req_idx * beam_size + beam_idx
                     q = attention_inputs.query[i : i + 1, :, :]
-                    
-                    # Get unshared_k and unshared_v from paged format using cache_idx
-                    k = attention_inputs.unshared_k[cache_idx, beam_idx, :, :, :]  # [kv_heads, max_decode_step, head_size]
-                    v = attention_inputs.unshared_v[cache_idx, beam_idx, :, :, :]  # [kv_heads, max_decode_step, head_size]
-                    
-                    # Transpose for group_matmul
+                    k = attention_inputs.unshared_k[cache_idx, beam_idx, :, :, :]
+                    v = attention_inputs.unshared_v[cache_idx, beam_idx, :, :, :]
                     q_t = q.permute(1, 0, 2)
-                    k_t = k.permute(0, 2, 1)  # [kv_heads, head_size, max_decode_step]
-
-                    sim = self.group_matmul(num_heads, kv_heads, q_t, k_t, head_size, decode_step)  # [num_heads, 1, unshared_kvlen]
+                    k_t = k.permute(0, 2, 1)
+                    sim = self.group_matmul(num_heads, kv_heads, q_t, k_t, head_size, decode_step)
                     sim = sim * scale
-
-                    # Softmax with stats
                     p, gm, gl = self.softmax_numpy(sim)
-                    gm = gm.permute(1, 0, 2)  # (q_seqlen, num_heads, 1)
+                    gm = gm.permute(1, 0, 2)
                     gl = gl.permute(1, 0, 2)
                     p_high = p.to(torch.float32)
                     out_high = self.group_matmul(num_heads, kv_heads, p_high, v, decode_step, head_size)
@@ -251,21 +244,18 @@ class TestFlashAttentionInfer:
                     out_low = self.group_matmul(num_heads, kv_heads, p_low, v, decode_step, head_size)
                     out_low = out_low.permute(1, 0, 2)
                     out_low = out_low.to(attention_inputs.query.dtype)
-
-                    # Write outputs
                     output[i : i + 1, :, :] = out_low
                     true_out[i : i + 1, :, :] = out_high
-
                     unshared_gm[i, :, :] = gm[:, :, :]
                     unshared_gl[i, :, :] = gl[:, :, :]
 
     def ref_single_query_shared_kv_attention(
         self,
-        attention_inputs: "TestFlashAttentionInfer.AttentionInputs",
-        output,
-        true_out,
-        shared_gl,
-        shared_gm,
+        attention_inputs: "TestXAttentionV2.AttentionInputs",
+        output: torch.Tensor,
+        true_out: torch.Tensor,
+        shared_gl: torch.Tensor,
+        shared_gm: torch.Tensor,
     ) -> None:
         num_heads = attention_inputs.shape_param.num_heads
         kv_heads = attention_inputs.shape_param.kv_heads
@@ -278,7 +268,6 @@ class TestFlashAttentionInfer:
         cu_seqlen = 0
         kv_seqlen_now = 0
         layout = "TND"
-
         for i in range(request_num):
             q_seqlen = int(beam_size)
             k_seqlen = int(attention_inputs.k_seqlen_list[i])
@@ -293,32 +282,26 @@ class TestFlashAttentionInfer:
                 for j in range(k_seqlen):
                     block_number = int(block_table[j // block_size])
                     block_offset = j % block_size
-
                     k = attention_inputs.key_cache[block_number, block_offset, :, :]
                     k = k.reshape(kv_heads, head_size_qk)
                     keys.append(k)
-
                     v = attention_inputs.value_cache[block_number, block_offset, :, :]
                     v = v.reshape(kv_heads, head_size_vo)
                     values.append(v)
             else:
                 for j in range(k_seqlen):
                     k = attention_inputs.key_cache[kv_seqlen_now + j, :, :]
-                    # k shape is already (kv_heads, head_size_qk)
                     keys.append(k)
-
                     v = attention_inputs.value_cache[kv_seqlen_now + j, :, :]
-                    # v shape is already (kv_heads, head_size_vo)
                     values.append(v)
-
             keys = torch.stack(keys, axis=0)
             values = torch.stack(values, axis=0)
-            scale = 1.0 / (head_size_qk ** 0.5)
+            scale = 1.0 / (head_size_qk**0.5)
             mask = None
             out, out_high, gm, gl = self.ref_masked_attention(q, keys, values, scale, mask)
             out = out.reshape(-1, num_heads, head_size_vo)
             out_high = out_high.reshape(-1, num_heads, head_size_vo)
-            gm = gm.permute(1, 0, 2)  # (q_seqlen, num_heads, 1)
+            gm = gm.permute(1, 0, 2)
             gl = gl.permute(1, 0, 2)
             output[cu_seqlen : cu_seqlen + q_seqlen, :, :] = out
             true_out[cu_seqlen : cu_seqlen + q_seqlen, :, :] = out_high
@@ -327,57 +310,66 @@ class TestFlashAttentionInfer:
             cu_seqlen += q_seqlen
             kv_seqlen_now += k_seqlen
 
-    def call_device_op(self, attention_inputs: "TestFlashAttentionInfer.AttentionInputs",
-                       q, k, v, unshared_k, unshared_v, 
-                       block_tables, unshared_block_tables, 
-                       actual_shared_kvlen, decode_step):        
-
+    def call_jit_op(
+        self,
+        attention_inputs: "TestXAttentionV2.AttentionInputs",
+        query: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        unshared_k: torch.Tensor,
+        unshared_v: torch.Tensor,
+        block_tables: list | None,
+        unshared_block_tables: list | None,
+        actual_shared_kvlen: list,
+        decode_step: int,
+    ) -> torch.Tensor:
         shared_kv_type = attention_inputs.shape_param.shared_kv_type
         unshared_kv_type = attention_inputs.shape_param.unshared_kv_type
-
-        q = q.npu()
-        k = k.npu()
-        v = v.npu()
+        q = query.npu()
+        k = key_cache.npu()
+        v = value_cache.npu()
         unshared_k = unshared_k.npu()
         unshared_v = unshared_v.npu()
-        
         if shared_kv_type == 1:
             block_tables = torch.tensor(copy.deepcopy(block_tables), dtype=torch.int32).npu()
         else:
             block_tables = None
-        
         if unshared_kv_type == 1:
             unshared_block_tables = torch.tensor(copy.deepcopy(unshared_block_tables), dtype=torch.int32).npu()
         else:
             unshared_block_tables = None
-            
         actual_shared_kvlen = torch.tensor(actual_shared_kvlen, dtype=torch.int32).npu()
         decode_step_tensor = torch.tensor([decode_step], dtype=torch.int32).npu()
-        
-        # ========== DEBUG ==========
-        print("="*80)
-        print(f"  q shape: {q.shape}")
-        print(f"  k shape: {k.shape if k is not None else None}")
-        print(f"  v shape: {v.shape if v is not None else None}")
-        print(f"  unshared_k shape: {unshared_k.shape}")
-        print(f"  unshared_v shape: {unshared_v.shape}")
-        print(f"  block_tables shape: {block_tables.shape if block_tables is not None else None}")
-        print(f"  unshared_block_tables shape: {unshared_block_tables.shape if unshared_block_tables is not None else None}")
-        print(f"  actual_shared_kvlen shape: {actual_shared_kvlen.shape}")
-        print(f"  decode_step_tensor shape: {decode_step_tensor.shape}")
-        print("="*80 + "\n")
-        
-        attn_out = custom_ops.x_attention_npu(
-            q, k, v, unshared_k, unshared_v, actual_shared_kvlen, decode_step_tensor,
-            block_tables, unshared_block_tables
+
+        import sys
+        sys.path.insert(0, '/workspace/xllm-ops/xllm_ops/x_attention_v2/op_kernel')
+        import x_attention_v2 as jit_host
+        jit_x_attention_v2 = jit_host.x_attention_v2
+
+        attn_out = torch.empty_like(q)
+        jit_x_attention_v2(
+            q,
+            k,
+            v,
+            unshared_k.contiguous(),
+            unshared_v.contiguous(),
+            actual_shared_kvlen,
+            decode_step_tensor,
+            attn_out,
+            unshared_block_table=unshared_block_tables,
+            shared_block_table=block_tables,
         )
         return attn_out
 
-    def calc_data(self, gen_data_params: "TestFlashAttentionInfer.GenDataParams"):
+    def calc_data(self, gen_data_params: "TestXAttentionV2.GenDataParams") -> None:
         cache_key = _golden_cache_key(
-            gen_data_params.dtype, gen_data_params.num_heads, gen_data_params.kv_heads,
-            len(gen_data_params.q_seqlen_list), gen_data_params.beam_size,
-            gen_data_params.k_seqlen_list[0], gen_data_params.unshared_kvlen
+            gen_data_params.dtype,
+            gen_data_params.num_heads,
+            gen_data_params.kv_heads,
+            len(gen_data_params.q_seqlen_list),
+            gen_data_params.beam_size,
+            gen_data_params.k_seqlen_list[0],
+            gen_data_params.unshared_kvlen,
         )
         cached = _load_golden(cache_key)
         if cached is not None:
@@ -393,15 +385,30 @@ class TestFlashAttentionInfer:
             final_true_out = cached["final_true_out"]
 
             attention_inputs = self.AttentionInputs(
-                query, key_cache, value_cache, unshared_key, unshared_value,
-                block_tables, unshared_block_tables,
-                gen_data_params.q_seqlen_list, gen_data_params.k_seqlen_list,
-                None, gen_data_params.mask_type, gen_data_params,
+                query,
+                key_cache,
+                value_cache,
+                unshared_key,
+                unshared_value,
+                block_tables,
+                unshared_block_tables,
+                gen_data_params.q_seqlen_list,
+                gen_data_params.k_seqlen_list,
+                None,
+                gen_data_params.mask_type,
+                gen_data_params,
             )
-
-            npu_res = self.call_device_op(
-                attention_inputs, query, key_cache, value_cache, unshared_key, unshared_value,
-                block_tables, unshared_block_tables, actual_shared_kvlen, decode_step
+            npu_res = self.call_jit_op(
+                attention_inputs,
+                query,
+                key_cache,
+                value_cache,
+                unshared_key,
+                unshared_value,
+                block_tables,
+                unshared_block_tables,
+                actual_shared_kvlen,
+                decode_step,
             )
             golden_res = final_true_out
             npu_res = npu_res.cpu().float()
@@ -427,71 +434,57 @@ class TestFlashAttentionInfer:
 
         batch_size = request_num * beam_size
         torch_dtype = gen_data_params.dtype
-        query = (torch.empty((num_tokens, gen_data_params.num_heads, head_size_qk), dtype=torch_dtype)
-                 .uniform_(q_min_range, q_max_range))
+        query = torch.empty((num_tokens, gen_data_params.num_heads, head_size_qk), dtype=torch_dtype).uniform_(
+            q_min_range, q_max_range
+        )
         max_k_seqlen = max(gen_data_params.k_seqlen_list)
-        block_tables = []  # (request_num, max_num_blocks_per_seq)
+        block_tables = []
         key_cache = None
         value_cache = None
-        
-        # Generate shared KV cache based on shared_kv_type
+
         if gen_data_params.shared_kv_type == 1:
-            # Paged format: [num_blocks, block_size, kv_heads, head_dim]
-            key_cache = (torch.empty(
+            key_cache = torch.empty(
                 (gen_data_params.num_blocks, gen_data_params.block_size, gen_data_params.kv_heads, head_size_qk),
-                dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
-            value_cache = (torch.empty(
+                dtype=torch_dtype,
+            ).uniform_(kv_min_range, kv_max_range)
+            value_cache = torch.empty(
                 (gen_data_params.num_blocks, gen_data_params.block_size, gen_data_params.kv_heads, head_size_vo),
-                dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
+                dtype=torch_dtype,
+            ).uniform_(kv_min_range, kv_max_range)
             max_num_blocks_per_seq = (max_k_seqlen + gen_data_params.block_size - 1) // gen_data_params.block_size
             for i in range(request_num):
                 block_table = [max_num_blocks_per_seq * i + j for j in range(max_num_blocks_per_seq)]
                 block_tables.append(block_table)
         else:
-            # Continuous format: [num_shared_kv, kv_heads, head_dim]
-            key_cache = (torch.empty(
-                (num_shared_kv, gen_data_params.kv_heads, head_size_qk),
-                dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
-
-            value_cache = (torch.empty(
-                (num_shared_kv, gen_data_params.kv_heads, head_size_vo),
-                dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
+            key_cache = torch.empty(
+                (num_shared_kv, gen_data_params.kv_heads, head_size_qk), dtype=torch_dtype
+            ).uniform_(kv_min_range, kv_max_range)
+            value_cache = torch.empty(
+                (num_shared_kv, gen_data_params.kv_heads, head_size_vo), dtype=torch_dtype
+            ).uniform_(kv_min_range, kv_max_range)
             block_tables = None
 
-        # Generate unshared KV cache based on unshared_kv_type
         unshared_key = None
         unshared_value = None
         unshared_block_tables = None
-        
+
         if gen_data_params.unshared_kv_type == 0:
-            # Continuous format: [request_num * beam_size, kv_heads, max_decode_step, head_dim]
-            unshared_key = (torch.empty(
+            unshared_key = torch.empty(
                 (batch_size, gen_data_params.kv_heads, max_decode_step, head_size_qk), dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
-            unshared_value = (torch.empty(
+            ).uniform_(kv_min_range, kv_max_range)
+            unshared_value = torch.empty(
                 (batch_size, gen_data_params.kv_heads, max_decode_step, head_size_vo), dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
+            ).uniform_(kv_min_range, kv_max_range)
         else:
-            # Paged format: [max_request_num, beam_size, kv_heads, max_decode_step, head_dim]
-            # Use request_num as max_request_num for simplicity (can be larger in real scenarios)
             max_request_num = request_num
-            unshared_key = (torch.empty(
+            unshared_key = torch.empty(
                 (max_request_num, beam_size, gen_data_params.kv_heads, max_decode_step, head_size_qk), dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
-            unshared_value = (torch.empty(
+            ).uniform_(kv_min_range, kv_max_range)
+            unshared_value = torch.empty(
                 (max_request_num, beam_size, gen_data_params.kv_heads, max_decode_step, head_size_vo), dtype=torch_dtype
-            ).uniform_(kv_min_range, kv_max_range))
-            
-            # Generate unshared_block_tables
-            # Each request has a block table mapping to its unshared KV cache
-            # For simplicity, each request maps to its own index in the paged cache
+            ).uniform_(kv_min_range, kv_max_range)
             unshared_block_tables = []
             for i in range(request_num):
-                # Each request maps to its own index (i) in the paged cache
                 unshared_block_tables.append([request_num - 1 - i])
 
         shape_out = (num_tokens, gen_data_params.num_heads, head_size_vo)
@@ -524,7 +517,6 @@ class TestFlashAttentionInfer:
         self.ref_single_query_shared_kv_attention(
             attention_inputs, shared_ref_out, shared_true_out, shared_gl, shared_gm
         )
-
         self.ref_single_query_unshared_kv_attention(
             attention_inputs, unshared_ref_out, unshared_true_out, unshared_gl, unshared_gm
         )
@@ -538,20 +530,35 @@ class TestFlashAttentionInfer:
         tmp_add = tmp_shared_true + tmp_unshared_true
         final_true_out = tmp_add / gl
 
-        # Prepare actual_shared_kvlen for device op
         actual_shared_kvlen = gen_data_params.k_seqlen_list
 
-        _save_golden(cache_key, {
-            "query": query, "key_cache": key_cache, "value_cache": value_cache,
-            "unshared_key": unshared_key, "unshared_value": unshared_value,
-            "block_tables": block_tables, "unshared_block_tables": unshared_block_tables,
-            "actual_shared_kvlen": actual_shared_kvlen, "decode_step": decode_step,
-            "final_true_out": final_true_out,
-        })
-        
-        npu_res = self.call_device_op(
-            attention_inputs, query, key_cache, value_cache, unshared_key, unshared_value, 
-            block_tables, unshared_block_tables, actual_shared_kvlen, decode_step
+        _save_golden(
+            cache_key,
+            {
+                "query": query,
+                "key_cache": key_cache,
+                "value_cache": value_cache,
+                "unshared_key": unshared_key,
+                "unshared_value": unshared_value,
+                "block_tables": block_tables,
+                "unshared_block_tables": unshared_block_tables,
+                "actual_shared_kvlen": actual_shared_kvlen,
+                "decode_step": decode_step,
+                "final_true_out": final_true_out,
+            },
+        )
+
+        npu_res = self.call_jit_op(
+            attention_inputs,
+            query,
+            key_cache,
+            value_cache,
+            unshared_key,
+            unshared_value,
+            block_tables,
+            unshared_block_tables,
+            actual_shared_kvlen,
+            decode_step,
         )
         golden_res = final_true_out
         npu_res = npu_res.cpu().float()
@@ -560,19 +567,27 @@ class TestFlashAttentionInfer:
         else:
             assert torch.allclose(npu_res, golden_res, atol=0.001, rtol=0.001)
 
+
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("num_head, kv_heads", [(16, 8), (32, 8), (16, 4)])
 @pytest.mark.parametrize("request_num", [1, 6])
 @pytest.mark.parametrize("beam_size", [128, 256, 512])
 @pytest.mark.parametrize("kv_seqlen", [128, 256, 512, 1024])
 @pytest.mark.parametrize("unshared_seqlen", [2, 4])
-def test_x_attention_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_seqlen, unshared_seqlen):
+def test_x_attention_v2_jit_npu(
+    dtype: torch.dtype,
+    num_head: int,
+    kv_heads: int,
+    request_num: int,
+    beam_size: int,
+    kv_seqlen: int,
+    unshared_seqlen: int,
+) -> None:
     try:
-        torch_npu.npu.set_device(int(os.environ.get("ASCEND_DEVICE_ID", 0)))
+        device_id = int(os.environ.get("ASCEND_DEVICE_ID", 0))
+        torch_npu.npu.set_device(device_id)
     except Exception as e:
         pytest.skip(f"NPU device not available: {e}")
-
-
 
     q_seqlen = 1
     embedding_size = 128
@@ -582,11 +597,11 @@ def test_x_attention_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_s
     shared_kv_type = 0
     unshared_kv_type = 1
 
-    q_seqlen_list, kv_seqlen_list = gen_seqlen(q_seqlen, kv_seqlen, is_varied_len, request_num)
+    q_seqlen_list, kv_seqlen_list = _gen_seqlen(q_seqlen, kv_seqlen, is_varied_len, request_num)
     max_kv_seqlen = max(kv_seqlen_list)
     num_blocks = request_num * ((max_kv_seqlen + block_size - 1) // block_size)
 
-    test_obj = TestFlashAttentionInfer()
+    test_obj = TestXAttentionV2()
     gen_data_params = test_obj.GenDataParams(
         q_seqlen_list,
         kv_seqlen_list,
@@ -600,6 +615,6 @@ def test_x_attention_npu(dtype, num_head, kv_heads, request_num, beam_size, kv_s
         mask_type,
         dtype,
         shared_kv_type,
-        unshared_kv_type
+        unshared_kv_type,
     )
     test_obj.calc_data(gen_data_params)

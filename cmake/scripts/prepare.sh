@@ -106,6 +106,10 @@ while [[ $# -gt 0 ]]; do
         ENABLE_OOM="$2"
         shift 2
         ;;
+    --hi_python)
+        HI_PYTHON="$2"
+        shift 2
+        ;;
     --cann_3rd_lib_path)
         CANN_3RD_LIB_PATH="$(realpath $2)"
         shift 2
@@ -164,7 +168,8 @@ function build() {
         -DCANN_3RD_LIB_PATH=${CANN_3RD_LIB_PATH} \
         -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
         -DVERSION=${VERSION} \
-        -DENABLE_OOM=${ENABLE_OOM}
+        -DENABLE_OOM=${ENABLE_OOM} \
+        -DPython3_EXECUTABLE=${HI_PYTHON:-python3}
         
     make ${JOB_NUM} prepare_build
 }

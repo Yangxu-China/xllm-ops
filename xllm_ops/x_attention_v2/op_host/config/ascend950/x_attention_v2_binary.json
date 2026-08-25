@@ -1,0 +1,213 @@
+{
+  "op_type": "XAttentionV2",
+  "op_list": [
+    {
+      "bin_filename": "XAttentionV2_00000000000000000000000000000001",
+      "inputs": [
+        {
+          "name": "query",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_key_block",
+          "index": 1,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_value_block",
+          "index": 2,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_key_block",
+          "index": 3,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_value_block",
+          "index": 4,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_block_table",
+          "index": 5,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_kv_lens",
+          "index": 6,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "decode_step",
+          "index": 7,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_block_table",
+          "index": 8,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "attn_out",
+          "index": 0,
+          "dtype": "bfloat16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "scale_value",
+          "dtype": "float",
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "bin_filename": "XAttentionV2_00000000000000000000000000000002",
+      "inputs": [
+        {
+          "name": "query",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_key_block",
+          "index": 1,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_value_block",
+          "index": 2,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_key_block",
+          "index": 3,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_value_block",
+          "index": 4,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "unshared_block_table",
+          "index": 5,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_kv_lens",
+          "index": 6,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "decode_step",
+          "index": 7,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        },
+        {
+          "name": "shared_block_table",
+          "index": 8,
+          "dtype": "int32",
+          "format": "ND",
+          "paramType": "optional",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "attn_out",
+          "index": 0,
+          "dtype": "float16",
+          "format": "ND",
+          "paramType": "required",
+          "shape": [-2],
+          "format_match_mode": "FormatAgnostic"
+        }
+      ],
+      "attrs": [
+        {
+          "name": "scale_value",
+          "dtype": "float",
+          "value": 0.0
+        }
+      ]
+    }
+  ]
+}

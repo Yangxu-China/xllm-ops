@@ -1,0 +1,88 @@
+/* Copyright 2025 The xLLM Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://gitcode.com/xLLM-AI/xllm_ops/blob/main/LICENSE
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "register/op_def_registry.h"
+
+namespace ops {
+class XAttentionV2 : public OpDef {
+public:
+    explicit XAttentionV2(const char *name) : OpDef(name)
+    {
+        this->Input("query")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("shared_key_block")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("shared_value_block")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("unshared_key_block")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("unshared_value_block")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("unshared_block_table")
+            .ParamType(OPTIONAL)
+            .DataType({ge::DT_INT32, ge::DT_INT32})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("shared_kv_lens")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_INT32, ge::DT_INT32})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("decode_step")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_INT32, ge::DT_INT32})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Input("shared_block_table")
+            .ParamType(OPTIONAL)
+            .DataType({ge::DT_INT32, ge::DT_INT32})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND})
+            .AutoContiguous();
+        this->Output("attn_out")
+            .ParamType(REQUIRED)
+            .DataType({ge::DT_FLOAT16, ge::DT_BF16})
+            .Format({ge::FORMAT_ND, ge::FORMAT_ND});
+        this->Attr("scale_value").AttrType(OPTIONAL).Float(0.0);
+
+        OpAICoreConfig aicore_config;
+        aicore_config.DynamicCompileStaticFlag(true)
+            .DynamicFormatFlag(true)
+            .DynamicRankSupportFlag(true)
+            .DynamicShapeSupportFlag(true)
+            .NeedCheckSupportFlag(false)
+            .PrecisionReduceFlag(true)
+            .ExtendCfgInfo("opFile.value", "x_attention_v2")
+            .ExtendCfgInfo("aclnnSupport.value", "support_aclnn");
+        this->AICore().AddConfig("ascend950", aicore_config);
+    }
+};
+
+OP_ADD(XAttentionV2);
+}

@@ -135,6 +135,7 @@ elif [[ "$SOC_VERSION" =~ ^(ascend)?910b ]]; then
         ### JD's in-house operators ####
         "beam_search_group"
         "x_attention"
+        "x_attention_v2"
         "cache_unshared_kv"
         "causal_conv1d"
         "causal_conv1d_qkv"
@@ -255,6 +256,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
          ### JD's in-house operators ####
         "beam_search_group"
         "x_attention"
+        "x_attention_v2"
         "cache_unshared_kv"
         "causal_conv1d"
         "causal_conv1d_qkv"
@@ -335,6 +337,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend950 ]]; then
         #  ### JD's in-house operators ####
         "beam_search_group"
         "x_attention"
+        "x_attention_v2"
         "cache_unshared_kv"
         "causal_conv1d"
         "causal_conv1d_qkv"
@@ -405,12 +408,13 @@ dump_selected_ops
   : "${SOC_VERSION:?SOC_VERSION is not set}"
   : "${SOC_ARG:?SOC_ARG is not set}"
 
-  log "build command: bash build.sh --pkg --ops=\"${CUSTOM_OPS}\" --soc=\"${SOC_ARG}\""
+  CUSTOM_OPS_CSV="${CUSTOM_OPS//;/,}"
+  log "build command: bash build.sh --pkg --ops=\"${CUSTOM_OPS_CSV}\" --soc=\"${SOC_ARG}\""
   log "building custom ops ${CUSTOM_OPS} for ${SOC_VERSION}"
   if [ -n "$BUILD_DIR_ARG" ]; then
-    bash build.sh --pkg --ops="${CUSTOM_OPS}" --soc="${SOC_ARG}" --build-dir="${BUILD_DIR_ARG}"
+    bash build.sh --pkg --ops="${CUSTOM_OPS_CSV}" --soc="${SOC_ARG}" --build-dir="${BUILD_DIR_ARG}"
   else
-    bash build.sh --pkg --ops="${CUSTOM_OPS}" --soc="${SOC_ARG}"
+    bash build.sh --pkg --ops="${CUSTOM_OPS_CSV}" --soc="${SOC_ARG}"
   fi
   log "build.sh finished"
 

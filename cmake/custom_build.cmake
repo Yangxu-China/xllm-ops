@@ -720,6 +720,13 @@ if (BUILD_OPEN_PROJECT)
 endif ()
 
 # ------------------------------------------------ generate adapt py ------------------------------------------------
+get_property(_pypto_adapt_ops GLOBAL PROPERTY PYPTO_ENABLED_OPS)
+set(PYPTO_ADAPT_OPS_OPTION "")
+if (_pypto_adapt_ops)
+    list(JOIN _pypto_adapt_ops "," _pypto_adapt_ops_str)
+    set(PYPTO_ADAPT_OPS_OPTION --pypto-ops ${_pypto_adapt_ops_str})
+endif ()
+
 add_custom_target(generate_xllm_adapt_py
         COMMAND ${HI_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/scripts/util/ascendc_impl_build.py
         \"\"
@@ -729,6 +736,7 @@ add_custom_target(generate_xllm_adapt_py
         ${ASCEND_IMPL_OUT_DIR}
         ${ASCEND_AUTOGEN_DIR}
         --opsinfo-dir ${base_aclnn_binary_dir} ${base_aclnn_binary_dir}/inner ${base_aclnn_binary_dir}/exc
+        ${PYPTO_ADAPT_OPS_OPTION}
 )
 
 add_dependencies(generate_xllm_adapt_py opbuild_gen_default opbuild_gen_inner opbuild_gen_exc)
