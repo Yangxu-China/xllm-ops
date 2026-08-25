@@ -133,6 +133,56 @@ resolve_soc_version_list() {
 }
 
 # ============================================================================
+# Catlass 兼容性补丁
+#
+# 背景：catlass 的 block_epilogue_dequant.hpp 使用 `AscendC::DT_FLOAT` 等写法，
+#   但 DT_FLOAT / DT_FLOAT16 / DT_BF16 在 CANN 的 kernel_type.h 中是预处理宏
+#   (#define DT_FLOAT 0 ...)，宏无法被命名空间限定，`AscendC::DT_FLOAT` 会被
+#   预处理成 `AscendC::0`，编译报 "expected unqualified-id"。
+#   此处在构建前就地剥离 AscendC:: 前缀（仅限 build.log 确认的单文件），幂等。
+#
+#   同时处理 rain_fusion / flash_attention 系列的 __simd_vf__ 非 static 成员
+#   函数问题：当前编译器要求 simd_vf 函数必须是自由函数或 static 成员函数。
+#   x_attention 不使用这些 epilogue，直接在 block_epilogue.hpp 中条件跳过。
+# ============================================================================
+patch_catlass_compat() {
+    local target="${BASE_DIR}/third_party/catlass/include/catlass/epilogue/block/block_epilogue_dequant.hpp"
+    if [[ -f "${target}" ]]; then
+        local before
+        before=$(grep -cE 'AscendC::DT_(FLOAT16|BF16|FLOAT)' "${target}" 2>/dev/null || true)
+        before=${before:-0}
+        if [[ "${before}" -gt 0 ]]; then
+            sed -i \
+                -e 's/AscendC::DT_FLOAT16\b/DT_FLOAT16/g' \
+                -e 's/AscendC::DT_BF16\b/DT_BF16/g' \
+                -e 's/AscendC::DT_FLOAT\b/DT_FLOAT/g' \
+                "${target}"
+            echo "[INFO] catlass patch: fixed $((before)) AscendC::DT_* in block_epilogue_dequant.hpp"
+        fi
+    fi
+
+    local epilogue_hpp="${BASE_DIR}/third_party/catlass/include/catlass/epilogue/block/block_epilogue.hpp"
+    if [[ -f "${epilogue_hpp}" ]] && ! grep -q "CATLASS_SKIP_RAIN_FUSION" "${epilogue_hpp}"; then
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_rain_fusion_attention_online_softmax_low_prec_fp16.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_rain_fusion_attention_online_softmax_low_prec_bf16.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_rain_fusion_attention_rescale_o.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_flash_attention_online_softmax_high_prec.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_flash_attention_online_softmax_low_prec.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        sed -i '/#include "catlass\/epilogue\/block\/block_epilogue_flash_attention_rescale_o.hpp"/s/^/\/\/CATLASS_SKIP_RAIN_FUSION /' "${epilogue_hpp}"
+        echo "[INFO] catlass patch: commented out rain_fusion / flash_attention includes in block_epilogue.hpp"
+    fi
+
+    local xa_files
+    xa_files=$(grep -rl '__simd_vf__ inline' "${BASE_DIR}/third_party/catlass/include/catlass/epilogue/block/block_epilogue_xa_"*.hpp 2>/dev/null || true)
+    if [[ -n "${xa_files}" ]]; then
+        for f in ${xa_files}; do
+            sed -i 's/    __simd_vf__ inline/    static __simd_vf__ inline/g' "$f"
+        done
+        echo "[INFO] catlass patch: added static to __simd_vf__ in XA epilogue files"
+    fi
+}
+
+# ============================================================================
 # 环境准备：设置编译器、清理打包产物
 # ============================================================================
 prepare_build_env() {
@@ -148,6 +198,9 @@ prepare_build_env() {
     export CXX=$(which g++)
     $CC --version
     $CXX --version
+
+    # 修正 catlass 第三方依赖的编译器兼容性问题（幂等）
+    patch_catlass_compat
 
     # 保留 BUILD_DIR 以支持增量编译，仅清理打包产物
     rm -rf dist
