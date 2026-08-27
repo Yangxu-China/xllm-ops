@@ -266,6 +266,38 @@ at::Tensor x_flash_attention_infer_impl_npu(
   return attn_out;
 }
 
+at::Tensor x_flash_attention_infer_v2_impl_npu(
+    const at::Tensor& query,
+    const at::Tensor& key_cache,
+    const at::Tensor& value_cache,
+    const c10::optional<at::Tensor>& mask,
+    const at::Tensor& block_table,
+    const at::Tensor& actual_q_lens,
+    const at::Tensor& actual_kv_lens,
+    const c10::optional<at::Tensor>& extra_tiling,
+    std::string layout,
+    int64_t qHead,
+    int64_t kvHead,
+    double scale) {
+  at::Tensor attn_out = at::empty(query.sizes().vec(), query.options());
+  char* layout_c = const_cast<char*>(layout.c_str());
+  EXEC_NPU_CMD(aclnnXFlashAttentionInferV2,
+               query,
+               key_cache,
+               value_cache,
+               mask,
+               block_table,
+               actual_q_lens,
+               actual_kv_lens,
+               extra_tiling,
+               layout_c,
+               qHead,
+               kvHead,
+               scale,
+               attn_out);
+  return attn_out;
+}
+
 // multi_latent_attention (MLA, DeepSeek split-cache decode).
 // MLA splits Q/KV into a NoPE (latent, 512) part and a RoPE (64) part; kernel
 // dims are hardcoded (embedding=512, rope=64, hidden=576). K = [kvCache|kvCacheRope],
@@ -2103,6 +2135,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("hc_pre_inv_rms", &hc_pre_inv_rms_impl_npu, "hc_pre_inv_rms");
   m.def("laser_attention", &laser_attention_impl_npu, "laser_attention");
   m.def("x_flash_attention_infer", &x_flash_attention_infer_impl_npu, "x_flash_attention_infer");
+  m.def("x_flash_attention_infer_v2", &x_flash_attention_infer_v2_impl_npu, "x_flash_attention_infer_v2");
   m.def("multi_latent_attention", &multi_latent_attention_impl_npu, "multi_latent_attention");
   m.def("rms_norm_dynamic_quant", &rms_norm_dynamic_quant_impl_npu, "rms_norm_dynamic_quant");
   m.def("lightning_indexer_quant", &lightning_indexer_quant_impl_npu, "lightning_indexer_quant");

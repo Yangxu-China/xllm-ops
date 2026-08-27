@@ -159,6 +159,7 @@ elif [[ "$SOC_VERSION" =~ ^(ascend)?910b ]]; then
         "select_unshared_kv"
         "x_attention_tl"
         "x_flash_attention_infer"
+        "x_flash_attention_infer_v2"
         "onerec_final_beam_select"
         "rec_constrained_top_k"
         "mega_chunk_gdn"
@@ -279,6 +280,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend910_93 ]]; then
         "select_unshared_kv"
         "x_attention_tl"
         "x_flash_attention_infer"
+        "x_flash_attention_infer_v2"
         "onerec_final_beam_select"
         "rec_constrained_top_k"
         "laser_attention"
@@ -357,6 +359,7 @@ elif [[ "$SOC_VERSION" =~ ^ascend950 ]]; then
         "select_unshared_kv"
         # "x_attention_tl"  # A5 kernel not adapted
         "x_flash_attention_infer"
+        "x_flash_attention_infer_v2"
         "onerec_final_beam_select"
         "rec_constrained_top_k"
          "multi_latent_attention"

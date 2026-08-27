@@ -370,6 +370,18 @@ def x_flash_attention_infer_npu(query, key_cache, value_cache, block_table,
     )
 
 
+# x_flash_attention_infer_v2: PyPTO Pro kernel (paged-KV flash decode, qSeqlen=1).
+# Same interface as v1; mask and extra_tiling accepted but ignored by kernel.
+def x_flash_attention_infer_v2_npu(query, key_cache, value_cache, block_table,
+                                  actual_q_lens, actual_kv_lens, q_head, kv_head,
+                                  scale, batch, kv_seqlen, mask=None, layout="TND"):
+    return custom_ops_lib.x_flash_attention_infer_v2(
+        query, key_cache, value_cache, mask, block_table,
+        actual_q_lens, actual_kv_lens, None,
+        layout, q_head, kv_head, scale,
+    )
+
+
 # multi_latent_attention: DeepSeek MLA split-cache paged decode.
 # Q/KV split into a NoPE (latent, 512-dim) part and a RoPE (64-dim) part; the
 # kernel hardcodes embedding=512, rope=64. K = [kvCache|kvCacheRope] (576),
