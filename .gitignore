@@ -100,3 +100,7 @@ ENV/
 /third_party/json/
 /third_party/makeself/
 /third_party/pkg/
+
+# test
+/test/python_test/golden_cache/
+/test/python_test/msprof_*/

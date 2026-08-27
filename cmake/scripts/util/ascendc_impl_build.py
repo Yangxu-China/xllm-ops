@@ -17,6 +17,28 @@ import os
 import sys
 
 import const_var
+
+if const_var.CHECK_ASC_DEVKIT_VERSION:
+    IMPORT_HEADER = """
+from asc_op_compile_base.common.platform import get_soc_spec
+from asc_op_compile_base.common.utils import para_check
+from asc_op_compile_base.asc_op_compiler import compile_op, replay_op, check_op_cap, generalize_op_params, get_code_channel, OpInfo
+from asc_op_compile_base.asc_op_compiler.compile_op import CommonUtility, AscendCLogLevel
+from asc_op_compile_base.common.buildcfg import get_default_build_config
+from asc_op_compile_base.common.buildcfg import get_current_build_config
+from asc_op_compile_base.common import register as tbe_register
+__version__ = '2.0.0'
+"""
+else:
+    IMPORT_HEADER = """
+from tbe.common.platform import get_soc_spec
+from tbe.common.utils import para_check
+from tbe.tikcpp import compile_op, replay_op, check_op_cap, generalize_op_params, get_code_channel, OpInfo
+from tbe.tikcpp.compile_op import CommonUtility, AscendCLogLevel
+from tbe.common.buildcfg import get_default_build_config
+from tbe.common.buildcfg import get_current_build_config
+import tbe.common.register as tbe_register
+"""
 import opdesc_parser
 import regex as re
 
@@ -33,13 +55,7 @@ import os, sys
 import ctypes
 import json
 import shutil
-from tbe.common.platform import get_soc_spec
-from tbe.common.utils import para_check
-from tbe.tikcpp import compile_op, replay_op, check_op_cap, generalize_op_params, get_code_channel, OpInfo
-from tbe.tikcpp.compile_op import CommonUtility, AscendCLogLevel
-from tbe.common.buildcfg import get_default_build_config
-from tbe.common.buildcfg import get_current_build_config
-import tbe.common.register as tbe_register
+{}
 PYF_PATH = os.path.dirname(os.path.realpath(__file__))
 
 DTYPE_MAP = {{"float32": ["DT_FLOAT", "float"],
@@ -290,6 +306,29 @@ COMPILE_OP_API_BUILT_IN = """
     else:
         raise RuntimeError("built-in opp compile, ascendc_impl.dat file path does not exist: %s" %(dat_path))
 """
+
+PYPTO_COMPILE_OP_API = """
+    msg = "start compile pypto Operator {}, kernel name is " + kernel_name
+    CommonUtility.print_compile_log("", msg, AscendCLogLevel.LOG_INFO)
+    op_type = "{}"
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "op_kernel", "{}.py")
+    if not os.path.exists(src):
+        raise RuntimeError("pypto DSL kernel not found next to wrapper: " + src)
+    code_channel = -1
+    op_info = OpInfo(kernel_name = kernel_name, op_type = op_type, inputs = __inputs__, outputs = __outputs__,\\
+        attrs = __attrs__ {}, origin_inputs=[{}], origin_outputs = [{}],\\
+                param_type_dynamic = {}, mc2_ctx = {}, param_type_list = {}, init_value_list = {},\\
+                output_shape_depend_on_compute = {})
+    pypto_compile_op(src, origin_func_name, op_info, options, code_channel, '{}', {})
+"""
+
+PYPTO_IMPORT_HEADER = """
+from unittest.mock import MagicMock as _PyptoMagicMock
+sys.modules["torch"] = _PyptoMagicMock(name="torch")
+sys.modules["torch_npu"] = _PyptoMagicMock(name="torch_npu")
+from pypto_pro.runtime.opc.pypto_compile import pypto_compile_op
+"""
+
 SUP_API = """
 def {}({}{}):
     __inputs__, __outputs__, __attrs__ = _build_args({})
@@ -361,11 +400,12 @@ class AdpBuilder(opdesc_parser.OpDesc):
     def __init__(self: any, op_type: str):
         self.argsdefv = []
         self.op_compile_option: str = "{}"
+        self.is_pypto = False
         super().__init__(op_type)
 
     def write_adapt(self: any, impl_path, path: str, op_compile_option_all: list = None):
         self._build_paradefault()
-        if os.environ.get("BUILD_BUILTIN_OPP") != "1" and impl_path != "":
+        if os.environ.get("BUILD_BUILTIN_OPP") != "1" and impl_path != "" and not self.is_pypto:
             src_file = os.path.join(impl_path, self.op_file + ".cpp")
             if not os.path.exists(src_file):
                 print(f"[ERROR]: operator: {self.op_file} source file: {src_file} does not found, please check.")
@@ -532,7 +572,8 @@ class AdpBuilder(opdesc_parser.OpDesc):
         now = datetime.datetime.now()
         curr_year = now.year
         former_year = curr_year - 1
-        fd.write(IMPL_HEAD.format(former_year, curr_year, self.input_ori_name, self.output_ori_name))
+        import_header = IMPORT_HEADER + (PYPTO_IMPORT_HEADER if self.is_pypto else "")
+        fd.write(IMPL_HEAD.format(former_year, curr_year, import_header, self.input_ori_name, self.output_ori_name))
 
     def _write_argparse(self: any, fd: object):
         args = self._build_paralist(False)
@@ -686,6 +727,24 @@ class AdpBuilder(opdesc_parser.OpDesc):
                         repr(extend_opt),
                     )
                 )
+            elif self.is_pypto:
+                fd.write(
+                    PYPTO_COMPILE_OP_API.format(
+                        self.op_type,
+                        self.op_type,
+                        self.op_file,
+                        self.impl_mode_op_info,
+                        ", ".join(self.input_name),
+                        ", ".join(self.output_name),
+                        self.param_type_dynamic,
+                        self._build_mc2_ctx(),
+                        self.input_type + self.output_type,
+                        self.output_init_value,
+                        self.output_shape_depend_on_compute,
+                        self.op_compile_option,
+                        repr(extend_opt),
+                    )
+                )
             else:
                 fd.write(
                     COMPILE_OP_API.format(
@@ -718,7 +777,8 @@ class AdpBuilder(opdesc_parser.OpDesc):
         fd.write(GLZ_API.format(self.op_type, self.op_intf, argsdef, argsval, self.op_type))
 
 
-def write_scripts(cfgfile: str, cfgs: dict, dirs: dict, ops: list = None, op_compile_option: list = None):
+def write_scripts(cfgfile: str, cfgs: dict, dirs: dict, ops: list = None, op_compile_option: list = None, pypto_ops: set = None):
+    pypto_ops = pypto_ops or set()
     batch_lists = cfgs.get(const_var.REPLAY_BATCH).split(";")
     iterator_lists = cfgs.get(const_var.REPLAY_ITERATE).split(";")
     file_map = {}
@@ -726,6 +786,7 @@ def write_scripts(cfgfile: str, cfgs: dict, dirs: dict, ops: list = None, op_com
         cfgfile, batch_lists, iterator_lists, AdpBuilder, ops, dirs.get(const_var.AUTO_GEN_DIR)
     )
     for op_desc in op_descs:
+        op_desc.is_pypto = op_desc.op_file in pypto_ops
         op_desc.write_adapt(dirs.get(const_var.CFG_IMPL_DIR), dirs.get(const_var.CFG_OUT_DIR), op_compile_option)
         file_map[op_desc.op_type] = op_desc.op_file
     return file_map
@@ -751,6 +812,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("argv", nargs="+")
     parser.add_argument("--opsinfo-dir", nargs="*", default=None)
+    parser.add_argument("--pypto-ops", nargs="?", const="", default="")
     return parser.parse_args(argv)
 
 
@@ -778,4 +840,5 @@ if __name__ == "__main__":
         ops_infos.append(args.argv[1])
 
     for ops_info in ops_infos:
-        write_scripts(cfgfile=ops_info, cfgs=rep_cfg, dirs=cfg_dir)
+        pypto_ops = {o for o in args.pypto_ops.replace(";", ",").split(",") if o}
+        write_scripts(cfgfile=ops_info, cfgs=rep_cfg, dirs=cfg_dir, pypto_ops=pypto_ops)

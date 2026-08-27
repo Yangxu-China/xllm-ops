@@ -535,6 +535,19 @@ function(add_bin_compile_target)
                 endforeach()
             endif ()
 
+            if (${op_file}_pypto_enabled)
+                set(_pypto_install_stamp ${OP_SRC_OUT_DIR}/op_kernel/.pypto_install.done)
+                add_custom_command(OUTPUT ${_pypto_install_stamp}
+                        COMMAND ${CMAKE_COMMAND} -E copy_directory ${${op_file}_pypto_gen_dir} ${OP_SRC_OUT_DIR}/op_kernel
+                        COMMAND ${CMAKE_COMMAND} -E touch ${_pypto_install_stamp}
+                        DEPENDS ${OP_TARGET_NAME}_src_copy
+                        VERBATIM
+                )
+                add_custom_target(${OP_TARGET_NAME}_pypto_install
+                        DEPENDS ${_pypto_install_stamp}
+                )
+            endif ()
+
             set(DYNAMIC_PY_FILE ${OP_SRC_OUT_DIR}/${op_type}.py)
             add_custom_command(OUTPUT ${DYNAMIC_PY_FILE}
                     COMMAND cp -rf ${ASCEND_IMPL_OUT_DIR}/dynamic/${op_file}.py ${DYNAMIC_PY_FILE}
@@ -637,6 +650,9 @@ function(add_bin_compile_target)
                 add_dependencies(${OP_TARGET_NAME}_${op_index} optiling_compat generate_ops_info)
             endif ()
             add_dependencies(${OP_TARGET_NAME}_${op_index} ${OP_TARGET_NAME}_src_copy ${OP_TARGET_NAME}_py_copy ${OP_TARGET_NAME}_mkdir)
+            if (${op_file}_pypto_enabled)
+                add_dependencies(${OP_TARGET_NAME}_${op_index} ${OP_TARGET_NAME}_pypto_install)
+            endif ()
             add_dependencies(${OP_TARGET_NAME} ${OP_TARGET_NAME}_${op_index})
         endif ()
     endforeach()
@@ -891,6 +907,90 @@ function(add_dependent_ops dependent_ops)
       add_subdirectory("${dep_op_path}" "${CMAKE_BINARY_DIR}/dependent-ops/${parent_path}/${dep_op}")
     endif()
   endforeach()
+endfunction()
+
+# ------------------------------------------------------------------------------------------------------------
+# require_pypto_pro(<op_name>)
+#   Require pypto_pro for the current operator. Call at the beginning of an operator's CMakeLists.txt, before
+#   registering any host or kernel build rules. If pypto_pro is unavailable in HI_PYTHON, warn and return from
+#   the caller's CMakeLists.txt so the whole operator is skipped.
+# ------------------------------------------------------------------------------------------------------------
+macro(require_pypto_pro op_name)
+    get_property(_pypto_pro_checked GLOBAL PROPERTY PYPTO_PRO_CHECKED)
+    if (NOT _pypto_pro_checked)
+        execute_process(
+            COMMAND ${HI_PYTHON} -c
+                    "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pypto_pro') else 1)"
+            RESULT_VARIABLE _pypto_pro_check_result
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        if (_pypto_pro_check_result EQUAL 0)
+            set_property(GLOBAL PROPERTY PYPTO_PRO_AVAILABLE TRUE)
+        else()
+            set_property(GLOBAL PROPERTY PYPTO_PRO_AVAILABLE FALSE)
+        endif()
+        set_property(GLOBAL PROPERTY PYPTO_PRO_CHECKED TRUE)
+    endif()
+
+    get_property(_pypto_pro_available GLOBAL PROPERTY PYPTO_PRO_AVAILABLE)
+    if (NOT _pypto_pro_available)
+        message(WARNING
+                "pypto_pro is unavailable in ${HI_PYTHON}; skip operator ${op_name}.")
+        return()
+    endif()
+
+    unset(_pypto_pro_checked)
+    unset(_pypto_pro_check_result)
+    unset(_pypto_pro_available)
+endmacro()
+
+# ------------------------------------------------------------------------------------------------------------
+# enable_pypto_kernel(<op_file>)
+#   Mark an operator whose kernel is written in PyPTO. Call ONCE from the op's op_host/CMakeLists.txt,
+#   and BEFORE add_modules_sources_with_soc(...) (so the tiling logic can read PYPTO_GEN_DIR).
+#   It runs pypto codegen at configure time into a pypto-exclusive dir, exposes PYPTO_GEN_DIR to the
+#   caller scope (for the host tiling -I), and records cache flags consumed by add_bin_compile_target
+#   to install the generated artifacts into the kernel staging dir.
+# ------------------------------------------------------------------------------------------------------------
+function(enable_pypto_kernel op_file)
+    set(_compute_units ${ASCEND_COMPUTE_UNIT})
+    list(FILTER _compute_units INCLUDE REGEX ".+")
+    if (NOT _compute_units)
+        message(FATAL_ERROR "enable_pypto_kernel: ASCEND_COMPUTE_UNIT is empty")
+    endif ()
+    list(GET _compute_units 0 _soc_unit)
+
+    set(_gen "${ASCEND_BINARY_OUT_DIR}/${_soc_unit}/${op_file}_pypto_gen")
+    set(_py  "${CMAKE_CURRENT_SOURCE_DIR}/../op_kernel/${op_file}.py")
+
+    if (NOT EXISTS ${_py})
+        message(FATAL_ERROR "enable_pypto_kernel: kernel python file not found: ${_py}")
+    endif ()
+
+    message(STATUS "pypto codegen: ${op_file} -> ${_gen}")
+    execute_process(
+        COMMAND ${HI_PYTHON} ${OPS_ADV_CMAKE_DIR}/scripts/pypto_codegen.py
+                --py-file "${_py}" --out-dir "${_gen}"
+                --op-file "${op_file}" --soc "${_soc_unit}"
+        RESULT_VARIABLE _rc
+    )
+    if (NOT _rc EQUAL 0)
+        message(FATAL_ERROR "pypto codegen failed for ${op_file} (exit ${_rc})")
+    endif ()
+
+    # Re-run configure (hence codegen) when the kernel python source changes.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_py})
+
+    # Read by add_modules_sources_with_soc (a macro, runs in this caller scope) to add the host tiling -I.
+    set(PYPTO_GEN_DIR ${_gen} PARENT_SCOPE)
+    # Read by add_bin_compile_target (separate scope) to install artifacts into kernel staging.
+    set(${op_file}_pypto_enabled TRUE    CACHE INTERNAL "pypto-enabled kernel ${op_file}")
+    set(${op_file}_pypto_gen_dir ${_gen} CACHE INTERNAL "pypto gen dir for ${op_file}")
+    # Collected by custom_build.cmake and passed to ascendc_impl_build.py as --pypto-ops so those ops get
+    # the pypto wrapper variant (its flash_attention_score() calls pypto_compile_op and locates the DSL
+    # .py next to itself). Keyed by op_file (matches op_desc.op_file).
+    set_property(GLOBAL APPEND PROPERTY PYPTO_ENABLED_OPS ${op_file})
 endfunction()
 
 if (BUILD_OPEN_PROJECT)
