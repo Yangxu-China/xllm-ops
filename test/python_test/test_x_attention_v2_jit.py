@@ -416,6 +416,12 @@ class TestXAttentionV2:
                 assert torch.allclose(npu_res, golden_res, atol=0.01, rtol=0.01)
             else:
                 assert torch.allclose(npu_res, golden_res, atol=0.001, rtol=0.001)
+            diff = (npu_res - golden_res).abs().max().item()
+            print(f"OP-MATRIX-V2 Hq={gen_data_params.num_heads} Hkv={gen_data_params.kv_heads} "
+                  f"d={gen_data_params.head_size} b={len(gen_data_params.q_seqlen_list)} "
+                  f"beam={gen_data_params.beam_size} prompt={gen_data_params.k_seqlen_list[0]} "
+                  f"maxDs={gen_data_params.unshared_kvlen} dstep={decode_step} "
+                  f"dtype={gen_data_params.dtype}: max|dev-gold|={diff:.4e}", flush=True)
             return
 
         head_size_qk = gen_data_params.head_size
@@ -566,6 +572,12 @@ class TestXAttentionV2:
             assert torch.allclose(npu_res, golden_res, atol=0.01, rtol=0.01)
         else:
             assert torch.allclose(npu_res, golden_res, atol=0.001, rtol=0.001)
+        diff = (npu_res - golden_res).abs().max().item()
+        print(f"OP-MATRIX-V2 Hq={gen_data_params.num_heads} Hkv={gen_data_params.kv_heads} "
+              f"d={gen_data_params.head_size} b={len(gen_data_params.q_seqlen_list)} "
+              f"beam={gen_data_params.beam_size} prompt={gen_data_params.k_seqlen_list[0]} "
+              f"maxDs={gen_data_params.unshared_kvlen} dstep={decode_step} "
+              f"dtype={gen_data_params.dtype}: max|dev-gold|={diff:.4e}", flush=True)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16])

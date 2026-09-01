@@ -22,16 +22,21 @@ limitations under the License.
 namespace optiling {
 
 BEGIN_TILING_DATA_DEF(XAttentionV2TilingData)
-TILING_DATA_FIELD_DEF(int64_t, batch)
-TILING_DATA_FIELD_DEF(int64_t, beam)
 TILING_DATA_FIELD_DEF(int64_t, hq)
 TILING_DATA_FIELD_DEF(int64_t, hkv)
+TILING_DATA_FIELD_DEF(int64_t, batch)
+TILING_DATA_FIELD_DEF(int64_t, beam_size)
+TILING_DATA_FIELD_DEF(int64_t, shared_m)
+TILING_DATA_FIELD_DEF(int64_t, group)
+TILING_DATA_FIELD_DEF(int64_t, unshared)
+TILING_DATA_FIELD_DEF(int64_t, max_ds)
 TILING_DATA_FIELD_DEF(int64_t, shared_total)
-TILING_DATA_FIELD_DEF(int64_t, u_maxds)
 TILING_DATA_FIELD_DEF(float, scale)
-TILING_DATA_FIELD_DEF(int64_t, sbt_stride)
-TILING_DATA_FIELD_DEF(int64_t, shared_core_num)
+TILING_DATA_FIELD_DEF(int64_t, num_tokens)
 TILING_DATA_FIELD_DEF(int64_t, total_cores)
+TILING_DATA_FIELD_DEF(int64_t, task_count)
+TILING_DATA_FIELD_DEF(int64_t, beams_per_task)
+TILING_DATA_FIELD_DEF(int64_t, unshared_n)
 END_TILING_DATA_DEF
 REGISTER_TILING_DATA_CLASS(XAttentionV2, XAttentionV2TilingData)
 
